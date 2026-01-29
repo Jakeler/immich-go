@@ -54,12 +54,21 @@ func (uc *UpCmd) saveTags(ctx context.Context, tag assets.Tag, ids []string) (as
 		uc.app.Log().Info("created tag", "tag", tag.Value)
 		tag.ID = r[0].ID
 	}
-	_, err := uc.client.Immich.TagAssets(ctx, tag.ID, ids)
+	resp, err := uc.client.Immich.TagAssets(ctx, tag.ID, ids)
 	if err != nil {
 		uc.app.Log().Error("failed to add assets to tag", "err", err, "tag", tag.Value, "assets", len(ids))
 		return tag, err
 	}
-	uc.app.Log().Info("updated tag", "tag", tag.Value, "assets", len(ids))
+	// Check for per-asset failures in the response
+	successCount := 0
+	for _, r := range resp {
+		if r.Success {
+			successCount++
+		} else {
+			uc.app.Log().Warn("failed to tag asset", "tag", tag.Value, "assetID", r.ID, "error", r.Error)
+		}
+	}
+	uc.app.Log().Info("updated tag", "tag", tag.Value, "assets", successCount, "attempted", len(ids))
 	return tag, err
 }
 
@@ -382,10 +391,13 @@ func (uc *UpCmd) handleAsset(ctx context.Context, a *assets.Asset) error {
 		return nil
 
 	case AlreadyProcessed: // SHA1 already processed
+		a.ID = advice.ServerAsset.ID
+		a.Albums = append(a.Albums, advice.ServerAsset.Albums...)
 		// Record as discarded - duplicate in input
 		uc.app.FileProcessor().RecordNonAsset(ctx, a.File, int64(a.FileSize), fileevent.DiscardedLocalDuplicate)
 		uc.app.FileProcessor().RecordAssetProcessed(ctx, a.File, int64(a.FileSize), fileevent.ProcessedMetadataUpdated)
 		uc.manageAssetAlbums(ctx, a.File, a.ID, a.Albums)
+		uc.manageAssetTags(ctx, a)
 		return nil
 
 	case SameOnServer:
@@ -395,12 +407,15 @@ func (uc *UpCmd) handleAsset(ctx context.Context, a *assets.Asset) error {
 		uc.app.FileProcessor().RecordNonAsset(ctx, a.File, int64(a.FileSize), fileevent.DiscardedServerDuplicate)
 		uc.app.FileProcessor().RecordAssetProcessed(ctx, a.File, int64(a.FileSize), fileevent.ProcessedMetadataUpdated)
 		uc.manageAssetAlbums(ctx, a.File, a.ID, a.Albums)
+		uc.manageAssetTags(ctx, a)
 
 	case BetterOnServer: // and manage albums
 		a.ID = advice.ServerAsset.ID
+		a.Albums = append(a.Albums, advice.ServerAsset.Albums...)
 		// Record as discarded - server has better version
 		uc.app.FileProcessor().RecordAssetDiscarded(ctx, a.File, int64(a.FileSize), fileevent.ProcessedMetadataUpdated, advice.Message)
 		uc.manageAssetAlbums(ctx, a.File, a.ID, a.Albums)
+		uc.manageAssetTags(ctx, a)
 
 	case ForceUpload:
 		var serverStatus string
@@ -569,13 +584,18 @@ func (uc *UpCmd) DeleteServerAssets(ctx context.Context, ids []string) error {
 	return uc.client.Immich.DeleteAssets(ctx, ids, false)
 }
 
+// processUploadedAsset manages albums and tags for an uploaded asset.
+// This function is called after a successful upload, including when the asset
+// is detected as a duplicate on the server. In the case of duplicates, we still
+// want to add the asset to any new albums and apply any new tags that weren't
+// previously associated with it.
 func (uc *UpCmd) processUploadedAsset(ctx context.Context, a *assets.Asset, serverStatus string) {
-	if serverStatus != immich.StatusDuplicate {
-		// TODO: current version of Immich doesn't allow to add same tag to an asset already tagged.
-		//       there is no mean to go the list of tagged assets for a given tag.
-		uc.manageAssetAlbums(ctx, a.File, a.ID, a.Albums)
-		uc.manageAssetTags(ctx, a)
-	}
+	// Always manage albums and tags, even for duplicates.
+	// This ensures that if the same file appears in multiple folders with
+	// --folder-as-album or --folder-as-tags, the asset will be added to all
+	// relevant albums and tagged with all relevant tags.
+	uc.manageAssetAlbums(ctx, a.File, a.ID, a.Albums)
+	uc.manageAssetTags(ctx, a)
 }
 
 /*
