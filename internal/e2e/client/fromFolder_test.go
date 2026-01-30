@@ -172,7 +172,7 @@ func Test_FromFolder(t *testing.T) {
 		e2eutils.CheckResults(t, map[fileevent.Code]int64{
 			fileevent.ProcessedUploadSuccess: 4,
 			fileevent.ProcessedAlbumAdded:    0,
-			fileevent.ProcessedTagged:        4,
+			fileevent.ProcessedTagged:        5,
 		}, false, a.FileProcessor())
 
 		// Map filenames to expected tags (derived from folder structure)
@@ -180,7 +180,7 @@ func Test_FromFolder(t *testing.T) {
 			"telescopes_01.jpg": {"folder-as-tags-test/one/same"},
 			"telescopes_02.jpg": {"folder-as-tags-test/one/unique1"},
 			"telescopes_03.jpg": {"folder-as-tags-test/2/same"},
-			"telescopes_04.jpg": {"folder-as-tags-test/2/unique2"},
+			"telescopes_04.jpg": {"folder-as-tags-test/2/unique2", "folder-as-tags-test/3.duplicate?"},
 		})
 	})
 }
